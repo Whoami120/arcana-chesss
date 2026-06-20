@@ -1,31 +1,34 @@
 import { useGameStore } from "../store/gameStore";
+import { getCard } from "../cards";
 
 export default function CardBar({ color, label }) {
   const cards = useGameStore((s) => s.cards[color]);
   const game = useGameStore((s) => s.game);
   const fen = useGameStore((s) => s.fen);
   const cardsDisabled = useGameStore((s) => s.cardsDisabled);
-  const timeoutWinner = useGameStore((s) => s.timeoutWinner);
+  const result = useGameStore((s) => s.result);
   const playCard = useGameStore((s) => s.playCard);
   const isFirstTurn = useGameStore((s) => s.isFirstTurn);
+  const sacrificeActive = useGameStore((s) => s.sacrifice.active);
 
   const isMyTurn = game.turn() === color;
-  const canPlay = isMyTurn && !cardsDisabled && !timeoutWinner;
-  const originPlayable = isFirstTurn(color);
+  const canPlay = isMyTurn && !cardsDisabled && !result && !sacrificeActive;
 
   return (
     <div style={{ margin: "10px 0" }}>
       <strong>{label} cards</strong>
       <div style={{ display: "flex", gap: "8px", marginTop: "6px" }}>
         {cards.map((card) => {
-          const originBlocked = card.id === "origin" && !originPlayable;
-          const disabled = card.used || !canPlay || originBlocked;
+          const def = getCard(card.id);
+          const firstTurnBlocked = def.firstTurnOnly && !isFirstTurn(color);
+          const disabled = card.used || !canPlay || firstTurnBlocked;
 
           return (
             <button
               key={card.id}
               onClick={() => playCard(color, card.id)}
               disabled={disabled}
+              title={def.description}
               style={{
                 padding: "10px 14px",
                 borderRadius: "8px",
@@ -33,11 +36,11 @@ export default function CardBar({ color, label }) {
                 cursor: disabled ? "not-allowed" : "pointer",
                 opacity: card.used ? 0.4 : 1,
                 background: card.used ? "#eee" : "#fff",
-                color: "#222", // <-- makes the card name readable
+                color: "#222",
                 fontWeight: "bold",
               }}
             >
-              {card.name}
+              {def.name}
               {card.used ? " (used)" : ""}
             </button>
           );

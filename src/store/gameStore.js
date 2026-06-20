@@ -1,34 +1,56 @@
 import { create } from "zustand";
 import { Chess } from "chess.js";
+import { CARD_LIST, getCard } from "../cards";
 
 const MOVE_TIME = 40;
-
 const initialGame = new Chess();
 
+// Build a starting hand from the card registry.
 function makeStartingCards() {
-  return [
-    { id: "origin", name: "Origin", used: false },
-    { id: "fool", name: "Fool", used: false },
-    { id: "sacrifice", name: "Sacrifice", used: false },
-  ];
+  return CARD_LIST.map((c) => ({ id: c.id, used: false }));
+}
+
+function markUsed(cards, color, cardId) {
+  const updated = cards[color].map((c) =>
+    c.id === cardId ? { ...c, used: true } : c
+  );
+  return { ...cards, [color]: updated };
+}
+
+function getResult(game) {
+  if (!game.isGameOver()) return null;
+  if (game.isCheckmate()) {
+    const winner = game.turn() === "w" ? "Black" : "White";
+    return { winner, reason: "checkmate" };
+  }
+  if (game.isStalemate()) return { winner: null, reason: "stalemate" };
+  if (game.isInsufficientMaterial())
+    return { winner: null, reason: "insufficient material" };
+  if (game.isThreefoldRepetition())
+    return { winner: null, reason: "repetition" };
+  return { winner: null, reason: "draw" };
 }
 
 export const useGameStore = create((set, get) => ({
   game: initialGame,
   fen: initialGame.fen(),
   seconds: MOVE_TIME,
-  timeoutWinner: null,
+  result: null,
 
   cards: { w: makeStartingCards(), b: makeStartingCards() },
   cardsDisabled: false,
   classicTheme: false,
 
-  makeMove: (from, to) => {
-    const { game, timeoutWinner } = get();
-    if (timeoutWinner) return false;
+  sacrifice: { active: false, color: null, fromSquare: null, pieceType: null },
+  cardMessage: "",
+
+  makeMove: (from, to, promotion = "q") => {
+    const { game, result, sacrifice } = get();
+    if (result) return false;
+    if (sacrifice.active) return false;
     try {
-      game.move({ from, to, promotion: "q" });
-      set({ fen: game.fen(), seconds: MOVE_TIME });
+      game.move({ from, to, promotion });
+      set({ fen: game.fen(), seconds: MOVE_TIME, result: getResult(game) });
       return true;
     } catch (error) {
       return false;
@@ -36,18 +58,16 @@ export const useGameStore = create((set, get) => ({
   },
 
   tick: () => {
-    const { seconds, timeoutWinner, game } = get();
-    if (timeoutWinner) return;
+    const { seconds, result, game } = get();
+    if (result) return;
     if (seconds <= 1) {
       const winner = game.turn() === "w" ? "Black" : "White";
-      set({ seconds: 0, timeoutWinner: winner });
+      set({ seconds: 0, result: { winner, reason: "timeout" } });
     } else {
       set({ seconds: seconds - 1 });
     }
   },
 
-  // Origin window: open ONLY for White's 1st move (0 moves played)
-  // or Black's 1st move (exactly 1 move played). After that, closed forever.
   isFirstTurn: (color) => {
     const movesPlayed = get().game.history().length;
     if (color === "w") return movesPlayed === 0;
@@ -55,28 +75,110 @@ export const useGameStore = create((set, get) => ({
     return false;
   },
 
+  // Generic: look the card up in the registry and run it.
   playCard: (color, cardId) => {
-    const { game, cards, cardsDisabled, timeoutWinner, isFirstTurn } = get();
-
-    if (timeoutWinner) return;
+    const { game, cards, cardsDisabled, result, isFirstTurn } = get();
+    if (result) return;
     if (cardsDisabled) return;
     if (game.turn() !== color) return;
 
-    const playerCards = cards[color];
-    const card = playerCards.find((c) => c.id === cardId);
-    if (!card || card.used) return;
+    const owned = cards[color].find((c) => c.id === cardId);
+    if (!owned || owned.used) return;
 
-    if (cardId === "origin") {
-      // HARD STOP: if the opening window has passed, Origin does nothing.
-      if (!isFirstTurn(color)) return;
-      set({ classicTheme: true, cardsDisabled: true });
+    const def = getCard(cardId);
+    if (!def) return;
+
+    // First-turn-only cards (Origin).
+    if (def.firstTurnOnly && !isFirstTurn(color)) return;
+
+    // Interactive cards (Sacrifice) start a board selection instead of firing now.
+    if (def.interactive) {
+      get().startSacrifice(color);
+      return;
     }
 
-    // (Fool and Sacrifice effects come next.)
+    // Instant cards run their effect with this small helper API.
+    const api = {
+      game,
+      color,
+      refreshBoard: () => set({ fen: game.fen() }),
+      setClassicMode: () => set({ classicTheme: true, cardsDisabled: true }),
+    };
+    def.effect(api);
 
-    const updatedCards = playerCards.map((c) =>
-      c.id === cardId ? { ...c, used: true } : c
-    );
-    set({ cards: { ...cards, [color]: updatedCards } });
+    set({ cards: markUsed(cards, color, cardId) });
+  },
+
+  startSacrifice: (color) => {
+    const { game, cards, cardsDisabled, result, sacrifice } = get();
+    if (result || cardsDisabled) return;
+    if (game.turn() !== color) return;
+    if (sacrifice.active) return;
+
+    const card = cards[color].find((c) => c.id === "sacrifice");
+    if (!card || card.used) return;
+
+    set({
+      sacrifice: { active: true, color, fromSquare: null, pieceType: null },
+      cardMessage: "Sacrifice: click ONE OF YOUR pieces (not the king).",
+    });
+  },
+
+  cancelSacrifice: () => {
+    set({
+      sacrifice: { active: false, color: null, fromSquare: null, pieceType: null },
+      cardMessage: "",
+    });
+  },
+
+  sacrificeClick: (square) => {
+    const { game, cards, sacrifice } = get();
+    if (!sacrifice.active) return;
+    const piece = game.get(square);
+    if (!piece) return;
+
+    if (sacrifice.fromSquare === null) {
+      if (piece.color !== sacrifice.color) {
+        set({ cardMessage: "That's not your piece. Click YOUR piece." });
+        return;
+      }
+      if (piece.type === "k") {
+        set({ cardMessage: "You can't sacrifice your king. Pick another." });
+        return;
+      }
+      set({
+        sacrifice: { ...sacrifice, fromSquare: square, pieceType: piece.type },
+        cardMessage: "Good. Now click an ENEMY piece of the SAME type.",
+      });
+      return;
+    }
+
+    if (square === sacrifice.fromSquare) {
+      set({
+        sacrifice: { ...sacrifice, fromSquare: null, pieceType: null },
+        cardMessage: "Pick one of YOUR pieces (not the king).",
+      });
+      return;
+    }
+
+    const enemyColor = sacrifice.color === "w" ? "b" : "w";
+    if (piece.color !== enemyColor) {
+      set({ cardMessage: "Pick an ENEMY piece of the same type." });
+      return;
+    }
+    if (piece.type !== sacrifice.pieceType) {
+      set({ cardMessage: "Must be the SAME type as your piece." });
+      return;
+    }
+
+    game.remove(sacrifice.fromSquare);
+    game.remove(square);
+
+    set({
+      fen: game.fen(),
+      cards: markUsed(cards, sacrifice.color, "sacrifice"),
+      sacrifice: { active: false, color: null, fromSquare: null, pieceType: null },
+      cardMessage: "",
+    });
   },
 }));
