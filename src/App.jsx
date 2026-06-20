@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Chessboard } from "react-chessboard";
-import { useGameStore } from "./store/gameStore";
+import { useGameStore } from "./state/gameStore";
 import CardBar from "./components/CardBar";
 
 export default function App() {
@@ -16,6 +16,7 @@ export default function App() {
   const cardMessage = useGameStore((s) => s.cardMessage);
   const sacrificeClick = useGameStore((s) => s.sacrificeClick);
   const cancelSacrifice = useGameStore((s) => s.cancelSacrifice);
+  const moveLog = useGameStore((s) => s.moveLog);
 
   const [pendingPromotion, setPendingPromotion] = useState(null);
 
@@ -26,7 +27,7 @@ export default function App() {
   }, [result, tick]);
 
   const turn = game.turn() === "w" ? "White" : "Black";
-  const moves = game.history();
+  const moves = moveLog;
 
   const movePairs = [];
   for (let i = 0; i < moves.length; i += 2) {
@@ -82,6 +83,7 @@ export default function App() {
     onPieceDrop: onPieceDrop,
     onSquareClick: onSquareClick,
     squareStyles: squareStyles,
+    showAnimations: false,
   };
 
   const timerColor = seconds <= 10 ? "#c0392b" : "#222";
@@ -141,7 +143,7 @@ export default function App() {
             </div>
           )}
 
-          <Chessboard options={chessboardOptions} />
+          <Chessboard key={fen} options={chessboardOptions} />
 
           <CardBar color="w" label="White" />
         </div>

@@ -1,4 +1,4 @@
-import { useGameStore } from "../store/gameStore";
+import { useGameStore } from "../state/gameStore";
 import { getCard } from "../cards";
 
 export default function CardBar({ color, label }) {
