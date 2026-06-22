@@ -2,7 +2,7 @@ import { useGameStore } from "../state/gameStore";
 import { getCard } from "../cards";
 import Card from "./Card";
 
-export default function CardBar({ color }) {
+export default function CardBar({ color, compact }) {
   const cards = useGameStore((s) => s.cards[color]);
   const game = useGameStore((s) => s.game);
   const fen = useGameStore((s) => s.fen);
@@ -17,7 +17,7 @@ export default function CardBar({ color }) {
   const canPlay = isMyTurn && !cardsDisabled && !result && !sacrificeActive;
 
   return (
-    <div style={{ display: "flex", gap: "8px" }}>
+    <div style={{ display: "flex", gap: compact ? "6px" : "12px", justifyContent: "center" }}>
       {cards.map((card) => {
         const def = getCard(card.id);
         const firstTurnBlocked = def.firstTurnOnly && !isFirstTurn(color);
@@ -29,6 +29,7 @@ export default function CardBar({ color }) {
             used={card.used}
             disabled={disabled}
             faceDown={faceDown}
+            compact={compact}
             onClick={() => playCard(color, card.id)}
           />
         );

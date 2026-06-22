@@ -44,7 +44,7 @@ export const useGameStore = create((set, get) => ({
   fen: initialGame.fen(),
   seconds: MOVE_TIME,
   result: null,
-  moveLog: [], // our own list of turns taken (survives turn-passing)
+  moveLog: [],
 
   cards: { w: makeStartingCards(), b: makeStartingCards() },
   cardsDisabled: false,
@@ -53,17 +53,39 @@ export const useGameStore = create((set, get) => ({
   sacrifice: { active: false, color: null, fromSquare: null, pieceType: null },
   cardMessage: "",
 
+  // ---- SEER ----
+  // active = card in play, color = who owns it, turnsLeft = visions remaining.
+  seer: { active: false, color: null, turnsLeft: 0 },
+  seerSuggestion: null, // a UCI move like "e2e4", or "unavailable", or null
+
   makeMove: (from, to, promotion = "q") => {
-    const { game, result, sacrifice, moveLog } = get();
+    const { game, result, sacrifice, moveLog, seer, seerSuggestion } = get();
     if (result) return false;
     if (sacrifice.active) return false;
     try {
       const mv = game.move({ from, to, promotion });
+
+      // If the Seer's owner just moved, use up one vision.
+      let nextSeer = seer;
+      let nextSuggestion = seerSuggestion;
+      if (seer.active && mv.color === seer.color) {
+        const left = seer.turnsLeft - 1;
+        if (left <= 0) {
+          nextSeer = { active: false, color: null, turnsLeft: 0 };
+          nextSuggestion = null;
+        } else {
+          nextSeer = { ...seer, turnsLeft: left };
+          nextSuggestion = null; // clear so the next turn gets a fresh reading
+        }
+      }
+
       set({
         fen: game.fen(),
         seconds: MOVE_TIME,
         result: getResult(game),
         moveLog: [...moveLog, mv.san],
+        seer: nextSeer,
+        seerSuggestion: nextSuggestion,
       });
       return true;
     } catch (error) {
@@ -113,10 +135,25 @@ export const useGameStore = create((set, get) => ({
       color,
       refreshBoard: () => set({ fen: game.fen() }),
       setClassicMode: () => set({ classicTheme: true, cardsDisabled: true }),
+      activateSeer: () => get().activateSeer(color),
     };
     def.effect(api);
 
     set({ cards: markUsed(cards, color, cardId) });
+  },
+
+  // Turn the Seer on for this color, 4 visions, fresh reading.
+  activateSeer: (color) => {
+    set({
+      seer: { active: true, color, turnsLeft: 4 },
+      seerSuggestion: null,
+    });
+  },
+
+  // The Seer panel calls this once Stockfish answers.
+  setSeerSuggestion: (move) => {
+    if (!get().seer.active) return; // ignore if it already expired
+    set({ seerSuggestion: move });
   },
 
   startSacrifice: (color) => {
@@ -181,8 +218,6 @@ export const useGameStore = create((set, get) => ({
       return;
     }
 
-    // Only block sacrifices that expose YOUR OWN king. Exposing the enemy
-    // king is allowed — it becomes a check they must answer.
     const trial = new Chess(game.fen());
     trial.remove(sacrifice.fromSquare);
     trial.remove(square);
@@ -195,7 +230,6 @@ export const useGameStore = create((set, get) => ({
       return;
     }
 
-    // Commit the removals, then pass the turn (Sacrifice costs your move).
     game.remove(sacrifice.fromSquare);
     game.remove(square);
     flipTurn(game);
