@@ -46,3 +46,12 @@ h1 { font-family: "Cinzel", Georgia, serif; letter-spacing: 2px; }
   transform: translateY(-6px);
   box-shadow: 0 0 0 2px var(--purple-bright), 0 0 18px rgba(155, 111, 240, 0.6);
 }
+/* Seer: pulsing glow on the suggested move squares */
+@keyframes seerPulseFrom {
+  0%, 100% { box-shadow: inset 0 0 0 3px rgba(217, 184, 122, 0.45); }
+  50%      { box-shadow: inset 0 0 0 5px rgba(217, 184, 122, 0.95); }
+}
+@keyframes seerPulseTo {
+  0%, 100% { box-shadow: inset 0 0 0 4px rgba(123, 224, 160, 0.55); }
+  50%      { box-shadow: inset 0 0 0 6px rgba(123, 224, 160, 1); }
+}

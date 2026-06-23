@@ -6,8 +6,23 @@ import { kingInCheck } from "../utils/chessRules";
 const MOVE_TIME = 40;
 const initialGame = new Chess();
 
-function makeStartingCards() {
-  return CARD_LIST.map((c) => ({ id: c.id, used: false }));
+// Shuffle a copy of any array (Fisher–Yates).
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+const HAND_SIZE = 3;
+
+// Deal one random hand of HAND_SIZE unique cards from the pool.
+function dealHand() {
+  return shuffle(CARD_LIST)
+    .slice(0, HAND_SIZE)
+    .map((c) => ({ id: c.id, used: false }));
 }
 
 function markUsed(cards, color, cardId) {
@@ -31,11 +46,10 @@ function getResult(game) {
   return { winner: null, reason: "draw" };
 }
 
-// chess.js has no "pass", so we flip whose move it is in the FEN.
 function flipTurn(game) {
   const parts = game.fen().split(" ");
   parts[1] = parts[1] === "w" ? "b" : "w";
-  parts[3] = "-"; // clear en passant
+  parts[3] = "-";
   game.load(parts.join(" "), { skipValidation: true });
 }
 
@@ -45,18 +59,28 @@ export const useGameStore = create((set, get) => ({
   seconds: MOVE_TIME,
   result: null,
   moveLog: [],
+  lastMove: null, // { from, to } of the most recent move, for the highlight
 
-  cards: { w: makeStartingCards(), b: makeStartingCards() },
+  cards: { w: dealHand(), b: dealHand() },
   cardsDisabled: false,
   classicTheme: false,
 
   sacrifice: { active: false, color: null, fromSquare: null, pieceType: null },
   cardMessage: "",
 
-  // ---- SEER ----
-  // active = card in play, color = who owns it, turnsLeft = visions remaining.
   seer: { active: false, color: null, turnsLeft: 0 },
-  seerSuggestion: null, // a UCI move like "e2e4", or "unavailable", or null
+  seerSuggestion: null,
+
+  // Hidden trap. silence[color] = true means a Silence is waiting on that player.
+  silence: { w: false, b: false },
+  silenceMessage: "", // shown to the trap's owner when it triggers
+
+  // AI opponent
+  aiLevel: null,    // chosen level object, or null until the player picks
+  gameStarted: false,
+
+  // Running count of YOUR move ratings, for the end-of-game summary.
+  ratingTally: {},
 
   makeMove: (from, to, promotion = "q") => {
     const { game, result, sacrifice, moveLog, seer, seerSuggestion } = get();
@@ -65,7 +89,6 @@ export const useGameStore = create((set, get) => ({
     try {
       const mv = game.move({ from, to, promotion });
 
-      // If the Seer's owner just moved, use up one vision.
       let nextSeer = seer;
       let nextSuggestion = seerSuggestion;
       if (seer.active && mv.color === seer.color) {
@@ -75,7 +98,7 @@ export const useGameStore = create((set, get) => ({
           nextSuggestion = null;
         } else {
           nextSeer = { ...seer, turnsLeft: left };
-          nextSuggestion = null; // clear so the next turn gets a fresh reading
+          nextSuggestion = null;
         }
       }
 
@@ -84,6 +107,7 @@ export const useGameStore = create((set, get) => ({
         seconds: MOVE_TIME,
         result: getResult(game),
         moveLog: [...moveLog, mv.san],
+        lastMove: { from: mv.from, to: mv.to },
         seer: nextSeer,
         seerSuggestion: nextSuggestion,
       });
@@ -111,6 +135,12 @@ export const useGameStore = create((set, get) => ({
     return false;
   },
 
+  // MoveRating calls this after judging each of your moves.
+  recordRating: (text) => {
+    const tally = get().ratingTally;
+    set({ ratingTally: { ...tally, [text]: (tally[text] || 0) + 1 } });
+  },
+
   playCard: (color, cardId) => {
     const { game, cards, cardsDisabled, result, isFirstTurn } = get();
     if (result) return;
@@ -122,6 +152,18 @@ export const useGameStore = create((set, get) => ({
 
     const def = getCard(cardId);
     if (!def) return;
+
+    // SILENCE TRAP: if a Silence is waiting on this player, their card is
+    // cancelled and wasted — its effect never runs.
+    if (get().silence[color]) {
+      const enemy = color === "w" ? "b" : "w";
+      set({
+        cards: markUsed(cards, color, cardId),
+        silence: { ...get().silence, [color]: false },
+        silenceMessage: `Silence cancelled ${color === "w" ? "White" : "Black"}'s ${def.name}!`,
+      });
+      return;
+    }
 
     if (def.firstTurnOnly && !isFirstTurn(color)) return;
 
@@ -136,13 +178,13 @@ export const useGameStore = create((set, get) => ({
       refreshBoard: () => set({ fen: game.fen() }),
       setClassicMode: () => set({ classicTheme: true, cardsDisabled: true }),
       activateSeer: () => get().activateSeer(color),
+      armSilence: (target) => set({ silence: { ...get().silence, [target]: true } }),
     };
     def.effect(api);
 
     set({ cards: markUsed(cards, color, cardId) });
   },
 
-  // Turn the Seer on for this color, 4 visions, fresh reading.
   activateSeer: (color) => {
     set({
       seer: { active: true, color, turnsLeft: 4 },
@@ -150,9 +192,8 @@ export const useGameStore = create((set, get) => ({
     });
   },
 
-  // The Seer panel calls this once Stockfish answers.
   setSeerSuggestion: (move) => {
-    if (!get().seer.active) return; // ignore if it already expired
+    if (!get().seer.active) return;
     set({ seerSuggestion: move });
   },
 
@@ -164,6 +205,16 @@ export const useGameStore = create((set, get) => ({
 
     const card = cards[color].find((c) => c.id === "sacrifice");
     if (!card || card.used) return;
+
+    // SILENCE TRAP: cancel and waste the Sacrifice before it starts.
+    if (get().silence[color]) {
+      set({
+        cards: markUsed(cards, color, "sacrifice"),
+        silence: { ...get().silence, [color]: false },
+        silenceMessage: `Silence cancelled ${color === "w" ? "White" : "Black"}'s Sacrifice!`,
+      });
+      return;
+    }
 
     set({
       sacrifice: { active: true, color, fromSquare: null, pieceType: null },
@@ -242,6 +293,41 @@ export const useGameStore = create((set, get) => ({
       cards: markUsed(cards, sacrifice.color, "sacrifice"),
       sacrifice: { active: false, color: null, fromSquare: null, pieceType: null },
       cardMessage: "",
+    });
+  },
+
+  // Player picked a level on the start screen.
+  startWithLevel: (level) => {
+    get().resetGame();
+    set({ aiLevel: level, gameStarted: true });
+  },
+
+  // Back to the level picker.
+  backToMenu: () => {
+    get().resetGame();
+    set({ aiLevel: null, gameStarted: false });
+  },
+
+  // Start a brand-new game from scratch (New Game / Rematch).
+  resetGame: () => {
+    const fresh = new Chess();
+    set({
+      game: fresh,
+      fen: fresh.fen(),
+      seconds: MOVE_TIME,
+      result: null,
+      moveLog: [],
+      lastMove: null,
+      cards: { w: dealHand(), b: dealHand() },
+      cardsDisabled: false,
+      classicTheme: false,
+      sacrifice: { active: false, color: null, fromSquare: null, pieceType: null },
+      cardMessage: "",
+      seer: { active: false, color: null, turnsLeft: 0 },
+      seerSuggestion: null,
+      silence: { w: false, b: false },
+      silenceMessage: "",
+      ratingTally: {},
     });
   },
 }));
