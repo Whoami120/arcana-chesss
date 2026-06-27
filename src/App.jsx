@@ -16,6 +16,7 @@ import SeerProphecy from "./components/SeerProphecy";
 import GameOverModal from "./components/GameOverModal";
 import SilenceStatus from "./components/SilenceStatus";
 import LevelSelect from "./components/LevelSelect";
+import CardPopup from "./components/CardPopup";
 
 export default function App() {
   const game = useGameStore((s) => s.game);
@@ -23,7 +24,7 @@ export default function App() {
   const result = useGameStore((s) => s.result);
   const makeMove = useGameStore((s) => s.makeMove);
   const tick = useGameStore((s) => s.tick);
-  const oppCount = useGameStore((s) => s.cards.b.length);
+  const oppCount = useGameStore((s) => s.cards.b.filter((c) => !c.used).length);
   const classicTheme = useGameStore((s) => s.classicTheme);
   const lastMove = useGameStore((s) => s.lastMove);
 
@@ -285,6 +286,7 @@ export default function App() {
           <div style={{ position: "relative" }}>
             <Chessboard key={fen} options={chessboardOptions} />
             {!classicTheme && <BoardSigil />}
+            <CardPopup />
           </div>
         </div>
       </div>
@@ -292,7 +294,6 @@ export default function App() {
       <div style={{ ...cell, gridArea: "mr" }}>
         <MoveHistory />
         <SeerProphecy />
-        <SilenceStatus />
       </div>
 
       <div style={{ ...cell, gridArea: "bl", display: "flex", alignItems: "center" }}>

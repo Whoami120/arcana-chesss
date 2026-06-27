@@ -74,6 +74,7 @@ export const useGameStore = create((set, get) => ({
   // Hidden trap. silence[color] = true means a Silence is waiting on that player.
   silence: { w: false, b: false },
   silenceMessage: "", // shown to the trap's owner when it triggers
+  cardPopup: null,    // { name, blocked } — shown center-board for a moment
 
   // AI opponent
   aiLevel: null,    // chosen level object, or null until the player picks
@@ -153,14 +154,13 @@ export const useGameStore = create((set, get) => ({
     const def = getCard(cardId);
     if (!def) return;
 
-    // SILENCE TRAP: if a Silence is waiting on this player, their card is
-    // cancelled and wasted — its effect never runs.
+    // SILENCE TRAP: block this card's power ONCE. The card is NOT consumed —
+    // it stays in hand to be replayed later. Silence is spent.
     if (get().silence[color]) {
-      const enemy = color === "w" ? "b" : "w";
       set({
-        cards: markUsed(cards, color, cardId),
         silence: { ...get().silence, [color]: false },
-        silenceMessage: `Silence cancelled ${color === "w" ? "White" : "Black"}'s ${def.name}!`,
+        silenceMessage: `Silence blocked ${color === "w" ? "White" : "Black"}'s ${def.name}!`,
+        cardPopup: { name: def.name, blocked: true },
       });
       return;
     }
@@ -182,9 +182,12 @@ export const useGameStore = create((set, get) => ({
     };
     def.effect(api);
 
-    set({ cards: markUsed(cards, color, cardId) });
+    set({
+      cards: markUsed(cards, color, cardId),
+      // Silence is a hidden trap — it shows no popup when played.
+      cardPopup: cardId === "silence" ? null : { name: def.name, blocked: false },
+    });
   },
-
   activateSeer: (color) => {
     set({
       seer: { active: true, color, turnsLeft: 4 },
@@ -197,6 +200,8 @@ export const useGameStore = create((set, get) => ({
     set({ seerSuggestion: move });
   },
 
+  clearCardPopup: () => set({ cardPopup: null }),
+
   startSacrifice: (color) => {
     const { game, cards, cardsDisabled, result, sacrifice } = get();
     if (result || cardsDisabled) return;
@@ -206,12 +211,12 @@ export const useGameStore = create((set, get) => ({
     const card = cards[color].find((c) => c.id === "sacrifice");
     if (!card || card.used) return;
 
-    // SILENCE TRAP: cancel and waste the Sacrifice before it starts.
+    // SILENCE TRAP: block the Sacrifice once; keep the card to replay later.
     if (get().silence[color]) {
       set({
-        cards: markUsed(cards, color, "sacrifice"),
         silence: { ...get().silence, [color]: false },
-        silenceMessage: `Silence cancelled ${color === "w" ? "White" : "Black"}'s Sacrifice!`,
+        silenceMessage: `Silence blocked ${color === "w" ? "White" : "Black"}'s Sacrifice!`,
+        cardPopup: { name: "Sacrifice", blocked: true },
       });
       return;
     }
@@ -327,6 +332,7 @@ export const useGameStore = create((set, get) => ({
       seerSuggestion: null,
       silence: { w: false, b: false },
       silenceMessage: "",
+      cardPopup: null,
       ratingTally: {},
     });
   },
